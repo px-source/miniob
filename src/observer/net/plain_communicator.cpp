@@ -13,6 +13,7 @@ See the Mulan PSL v2 for more details. */
 //
 
 #include "net/plain_communicator.h"
+#include <cstring>
 #include "common/io/io.h"
 #include "common/log/log.h"
 #include "event/session_event.h"
@@ -34,61 +35,53 @@ RC PlainCommunicator::read_event(SessionEvent *&event)
 
   event = nullptr;
 
-  int data_len = 0;
-  int read_len = 0;
+  constexpr size_t max_packet_size = 1024 * 1024;  // 1MB
+  constexpr size_t read_chunk_size = 4096;
+  vector<char>     buf;
+  buf.reserve(read_chunk_size);
 
-  const int    max_packet_size = 8192;
-  vector<char> buf(max_packet_size);
+  int  read_len = 0;
+  bool msg_end  = false;
 
-  // 持续接收消息，直到遇到'\0'。将'\0'遇到的后续数据直接丢弃没有处理，因为目前仅支持一收一发的模式
-  while (true) {
-    read_len = ::read(fd_, buf.data() + data_len, max_packet_size - data_len);
+  // 持续接收消息，直到遇到 '\0'。'\0' 后续数据在当前请求中会被丢弃（当前协议按一收一发处理）。
+  while (!msg_end) {
+    char read_buf[read_chunk_size];
+    read_len = ::read(fd_, read_buf, sizeof(read_buf));
     if (read_len < 0) {
-      if (errno == EAGAIN) {
+      if (errno == EINTR) {
         continue;
       }
-      break;
+      LOG_ERROR("Failed to read socket of %s, %s", addr(), strerror(errno));
+      return RC::IOERR_READ;
     }
     if (read_len == 0) {
-      break;
-    }
-
-    if (read_len + data_len > max_packet_size) {
-      data_len += read_len;
-      break;
-    }
-
-    bool msg_end = false;
-    for (int i = 0; i < read_len; i++) {
-      if (buf[data_len + i] == 0) {
-        data_len += i + 1;
-        msg_end = true;
-        break;
+      if (buf.empty()) {
+        LOG_INFO("The peer has been closed %s", addr());
+        return RC::IOERR_CLOSE;
       }
+      LOG_WARN("Peer closed connection before message terminator. addr=%s", addr());
+      return RC::IOERR_READ;
     }
 
-    if (msg_end) {
-      break;
+    void *terminator = memchr(read_buf, 0, read_len);
+    if (terminator != nullptr) {
+      const auto valid_len = static_cast<size_t>(static_cast<char *>(terminator) - read_buf);
+      buf.insert(buf.end(), read_buf, read_buf + valid_len);
+      msg_end = true;
+    } else {
+      buf.insert(buf.end(), read_buf, read_buf + read_len);
     }
 
-    data_len += read_len;
+    if (buf.size() >= max_packet_size) {
+      LOG_WARN("The length of sql exceeds the limitation %zu", max_packet_size);
+      return RC::IOERR_TOO_LONG;
+    }
   }
 
-  if (data_len > max_packet_size) {
-    LOG_WARN("The length of sql exceeds the limitation %d", max_packet_size);
-    return RC::IOERR_TOO_LONG;
-  }
-  if (read_len == 0) {
-    LOG_INFO("The peer has been closed %s", addr());
-    return RC::IOERR_CLOSE;
-  } else if (read_len < 0) {
-    LOG_ERROR("Failed to read socket of %s, %s", addr(), strerror(errno));
-    return RC::IOERR_READ;
-  }
-
-  LOG_INFO("receive command(size=%d): %s", data_len, buf.data());
+  LOG_INFO("receive command(size=%zu): %.*s",
+      buf.size(), static_cast<int>(buf.size()), buf.data());
   event = new SessionEvent(this);
-  event->set_query(string(buf.data()));
+  event->set_query(string(buf.data(), buf.size()));
   return rc;
 }
 
@@ -203,7 +196,7 @@ RC PlainCommunicator::write_result_internal(SessionEvent *event, bool &need_disc
   for (int i = 0; i < cell_num; i++) {
     const TupleCellSpec &spec  = schema.cell_at(i);
     const char          *alias = spec.alias();
-    if (nullptr != alias || alias[0] != 0) {
+    if (nullptr != alias && alias[0] != 0) {
       if (0 != i) {
         const char *delim = " | ";
 
