@@ -4,6 +4,7 @@
 #include "common/log/log.h"
 #include "sql/expr/tuple.h"
 #include "storage/field/field_meta.h"
+#include "storage/record/text_lob.h"
 #include "storage/table/table.h"
 #include "storage/trx/trx.h"
 
@@ -104,7 +105,34 @@ RC UpdatePhysicalOperator::make_new_record(const Record &old_record, Record &new
 
   const int field_offset = field_meta_->offset();
   const int field_len    = field_meta_->len();
-  if (field_meta_->type() == AttrType::CHARS || field_meta_->type() == AttrType::TEXTS) {
+  if (field_meta_->type() == AttrType::TEXTS) {
+    if (field_len < static_cast<int>(sizeof(TextLobLocator))) {
+      free(record_data);
+      LOG_WARN("invalid text field length. field=%s, len=%d", field_meta_->name(), field_len);
+      return RC::INTERNAL;
+    }
+    if (table_->lob_handler() == nullptr) {
+      free(record_data);
+      LOG_WARN("lob handler not initialized. table=%s", table_->name());
+      return RC::INTERNAL;
+    }
+
+    int64_t offset = 0;
+    RC      rc     = table_->lob_handler()->insert_data(offset, value_.length(), value_.data());
+    if (OB_FAIL(rc)) {
+      free(record_data);
+      LOG_WARN("failed to write text value to lob. rc=%s", strrc(rc));
+      return rc;
+    }
+
+    TextLobLocator locator;
+    locator.offset = offset;
+    locator.length = value_.length();
+    locator.magic  = TEXT_LOB_MAGIC;
+
+    memset(record_data + field_offset, 0, field_len);
+    memcpy(record_data + field_offset, &locator, sizeof(locator));
+  } else if (field_meta_->type() == AttrType::CHARS) {
     memset(record_data + field_offset, 0, field_len);
 
     size_t copy_len = field_len;

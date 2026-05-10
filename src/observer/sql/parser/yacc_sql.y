@@ -364,7 +364,11 @@ attr_def:
       $$ = new AttrInfoSqlNode;
       $$->type = (AttrType)$2;
       $$->name = $1;
-      $$->length = $4;
+      if ((AttrType)$2 == AttrType::TEXTS) {
+        $$->length = TEXT_LOB_LOCATOR_LEN;
+      } else {
+        $$->length = $4;
+      }
     }
     | ID type
     {
@@ -372,7 +376,7 @@ attr_def:
       $$->type = (AttrType)$2;
       $$->name = $1;
       if ((AttrType)$2 == AttrType::TEXTS) {
-        $$->length = 4096;
+        $$->length = TEXT_LOB_LOCATOR_LEN;
       } else {
         $$->length = 4;
       }

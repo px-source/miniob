@@ -26,6 +26,8 @@ enum class AttrType
   MAXTYPE,   ///< 请在 UNDEFINED 与 MAXTYPE 之间增加新类型
 };
 
+static constexpr int TEXT_LOB_LOCATOR_LEN = 16;
+
 const char *attr_type_to_string(AttrType type);
 AttrType    attr_type_from_string(const char *s);
 bool        is_numerical_type(AttrType type);

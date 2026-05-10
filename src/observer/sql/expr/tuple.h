@@ -20,6 +20,8 @@ See the Mulan PSL v2 for more details. */
 #include "sql/parser/parse.h"
 #include "common/value.h"
 #include "storage/record/record.h"
+#include "storage/record/text_lob.h"
+#include "storage/table/table.h"
 
 class Table;
 
@@ -195,9 +197,37 @@ public:
 
     FieldExpr       *field_expr = speces_[index];
     const FieldMeta *field_meta = field_expr->field().meta();
+    const char *field_data = this->record_->data() + field_meta->offset();
+    if (field_meta->type() == AttrType::TEXTS) {
+      TextLobLocator locator = decode_text_lob_locator(field_data, field_meta->len());
+      if (locator.magic == TEXT_LOB_MAGIC) {
+        if (table_ == nullptr || table_->lob_handler() == nullptr) {
+          LOG_WARN("lob handler is null while reading text field. table=%s, field=%s", table_ ? table_->name() : "null",
+              field_meta->name());
+          return RC::INTERNAL;
+        }
+
+        Value lob_value;
+        lob_value.set_empty_string(locator.length);
+        RC rc = table_->lob_handler()->get_data(locator.offset, locator.length, lob_value.data());
+        if (OB_FAIL(rc)) {
+          LOG_WARN("failed to read text from lob. table=%s, field=%s, rc=%s", table_->name(), field_meta->name(), strrc(rc));
+          return rc;
+        }
+        lob_value.set_type(AttrType::TEXTS);
+        cell = std::move(lob_value);
+        return RC::SUCCESS;
+      }
+
+      // Backward compatibility: old text values may be stored inline.
+      cell.set_string(field_data, field_meta->len());
+      cell.set_type(AttrType::TEXTS);
+      return RC::SUCCESS;
+    }
+
     cell.reset();
     cell.set_type(field_meta->type());
-    cell.set_data(this->record_->data() + field_meta->offset(), field_meta->len());
+    cell.set_data(const_cast<char *>(field_data), field_meta->len());
     return RC::SUCCESS;
   }
 

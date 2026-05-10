@@ -27,6 +27,7 @@ See the Mulan PSL v2 for more details. */
 #include "storage/common/meta_util.h"
 #include "storage/index/bplus_tree_index.h"
 #include "storage/index/index.h"
+#include "storage/record/text_lob.h"
 #include "storage/record/record_manager.h"
 #include "storage/table/table.h"
 #include "storage/trx/trx.h"
@@ -99,10 +100,18 @@ RC Table::create(Db *db, int32_t table_id, const char *path, const char *name, c
   db_       = db;
 
   string             data_file = table_data_file(base_dir, name);
+  string             lob_file  = table_lob_file(base_dir, name);
   BufferPoolManager &bpm       = db->buffer_pool_manager();
   rc                           = bpm.create_file(data_file.c_str());
   if (rc != RC::SUCCESS) {
     LOG_ERROR("Failed to create disk buffer pool of data file. file name=%s", data_file.c_str());
+    return rc;
+  }
+
+  lob_handler_ = new LobFileHandler();
+  rc           = lob_handler_->create_file(lob_file.c_str());
+  if (rc != RC::SUCCESS) {
+    LOG_ERROR("failed to create lob file. file=%s, rc=%s", lob_file.c_str(), strrc(rc));
     return rc;
   }
 
@@ -143,6 +152,16 @@ RC Table::open(Db *db, const char *meta_file, const char *base_dir)
   fs.close();
 
   db_       = db;
+  string lob_file = table_lob_file(base_dir, table_meta_.name());
+  lob_handler_    = new LobFileHandler();
+  RC open_lob_rc  = lob_handler_->open_file(lob_file.c_str());
+  if (open_lob_rc == RC::FILE_NOT_EXIST) {
+    open_lob_rc = lob_handler_->create_file(lob_file.c_str());
+  }
+  if (open_lob_rc != RC::SUCCESS) {
+    LOG_ERROR("failed to open lob file. file=%s, rc=%s", lob_file.c_str(), strrc(open_lob_rc));
+    return open_lob_rc;
+  }
 
   // // 加载数据文件
   // RC rc = init_record_handler(base_dir);
@@ -253,9 +272,37 @@ RC Table::make_record(int value_num, const Value *values, Record &record)
 
 RC Table::set_value_to_record(char *record_data, const Value &value, const FieldMeta *field)
 {
+  if (field->type() == AttrType::TEXTS) {
+    if (field->len() < static_cast<int>(sizeof(TextLobLocator))) {
+      LOG_WARN("invalid text field length. field=%s, len=%d", field->name(), field->len());
+      return RC::INTERNAL;
+    }
+    if (lob_handler_ == nullptr) {
+      LOG_WARN("lob handler not initialized. table=%s", table_meta_.name());
+      return RC::INTERNAL;
+    }
+
+    int64_t offset = 0;
+    RC      rc     = lob_handler_->insert_data(offset, value.length(), value.data());
+    if (OB_FAIL(rc)) {
+      LOG_WARN("failed to write text value to lob. rc=%s", strrc(rc));
+      return rc;
+    }
+
+    TextLobLocator locator;
+    locator.offset = offset;
+    locator.length = value.length();
+    locator.magic  = TEXT_LOB_MAGIC;
+
+    char *field_data = record_data + field->offset();
+    memset(field_data, 0, field->len());
+    memcpy(field_data, &locator, sizeof(locator));
+    return RC::SUCCESS;
+  }
+
   size_t       copy_len = field->len();
   const size_t data_len = value.length();
-  if (field->type() == AttrType::CHARS || field->type() == AttrType::TEXTS) {
+  if (field->type() == AttrType::CHARS) {
     if (copy_len > data_len) {
       copy_len = data_len + 1;
     }
