@@ -31,6 +31,7 @@ See the Mulan PSL v2 for more details. */
 #include "sql/stmt/show_tables_stmt.h"
 #include "sql/stmt/trx_begin_stmt.h"
 #include "sql/stmt/trx_end_stmt.h"
+#include "sql/stmt/update_stmt.h"
 
 bool stmt_type_ddl(StmtType type)
 {
@@ -57,6 +58,9 @@ RC Stmt::create_stmt(Db *db, ParsedSqlNode &sql_node, Stmt *&stmt)
     case SCF_DELETE: {
       return DeleteStmt::create(db, sql_node.deletion, stmt);
     }
+    case SCF_UPDATE: {
+      return UpdateStmt::create(db, sql_node.update, stmt);
+    }
     case SCF_SELECT: {
       return SelectStmt::create(db, sql_node.selection, stmt);
     }
@@ -76,6 +80,7 @@ RC Stmt::create_stmt(Db *db, ParsedSqlNode &sql_node, Stmt *&stmt)
     case SCF_DROP_TABLE: {
       return DropTableStmt::create(db, sql_node.drop_table, stmt);
     }
+
 
     case SCF_DESC_TABLE: {
       return DescTableStmt::create(db, sql_node.desc_table, stmt);
