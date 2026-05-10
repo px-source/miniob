@@ -29,6 +29,11 @@ RC CharType::set_value_from_str(Value &val, const string &data) const
 RC CharType::cast_to(const Value &val, AttrType type, Value &result) const
 {
   switch (type) {
+    case AttrType::TEXTS:
+      // CHARS 可以隐式转换为 TEXT
+      result.set_string(val.value_.pointer_value_, val.length_);
+      result.set_type(AttrType::TEXTS);
+      return RC::SUCCESS;
     default: return RC::UNIMPLEMENTED;
   }
   return RC::SUCCESS;
@@ -38,6 +43,9 @@ int CharType::cast_cost(AttrType type)
 {
   if (type == AttrType::CHARS) {
     return 0;
+  }
+  if (type == AttrType::TEXTS) {
+    return 1;
   }
   return INT32_MAX;
 }

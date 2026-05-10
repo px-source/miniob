@@ -35,6 +35,7 @@ public:
   friend class FloatType;
   friend class BooleanType;
   friend class CharType;
+  friend class TextType;
   friend class VectorType;
 
   Value() = default;
@@ -132,6 +133,6 @@ private:
     char   *pointer_value_;
   } value_ = {.int_value_ = 0};
 
-  /// 是否申请并占有内存, 目前对于 CHARS 类型 own_data_ 为true, 其余类型 own_data_ 为false
+  /// 是否申请并占有内存, 当前对于 CHARS/TEXTS 类型 own_data_ 为true, 其余类型 own_data_ 为false
   bool own_data_ = false;
 };
